@@ -347,6 +347,8 @@ Client → Download → Review Prompt → Submit → Store → Dashboard Display
 - API access for developers
 - Team collaboration
 - Mobile application
+- Creator hiring
+- P2P chat
 
 ---
 
