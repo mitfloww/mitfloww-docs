@@ -602,6 +602,37 @@ When adding new knowledge:
 
 ---
 
+# To view markdown in visual studio code
+1. Quick preview (side-by-side)
+
+    * Open your .md file
+
+    * Press:
+
+      * Windows/Linux: `Ctrl + K then V`
+
+      * Mac: `Cmd + K then V`
+
+    This opens a live preview beside your editor.
+
+2. Open preview tab (not split)
+
+    * Press:
+
+      `Ctrl + Shift + V`
+
+3. Command palette method
+
+    * Press `Ctrl + Shift + P`
+
+    * Search:
+
+      * `Markdown: Open Preview`
+
+      * `or Markdown: Open Preview to the Side`
+
+---
+
 # Purpose of This Repository
 
 Software projects accumulate knowledge over time.
@@ -618,4 +649,3 @@ This repository ensures that:
 The goal is to make FileWall development **easier, clearer, and more maintainable over time**.
 
 ---
-
