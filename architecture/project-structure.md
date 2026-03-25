@@ -1,13 +1,46 @@
-# Architecture Name - Modular Feature Architecture
+# Modular Feature Architecture
+
+## 📚 Table of Contents
+
+* [**Overview**](#overview)
+* [**Example**](#example)
+
+    * [Folder Structure](#folder-structure)
+  * [**Architecture Breakdown**](#architecture-breakdown)
+
+    * [app/ folder](#app-folder)
+    * [modules/ folder](#modules-folder-the-heart)
+    * [lib/ folder](#lib-folder)
+    * [components/](#components)
+    * [hooks/](#hooks)
+  * [Key Principles](#key-principles)
+* [**Problem**](#problem)
+* [**Solution**](#solution)
+* [**Notes**](#notes)
+
+---
 
 ## Overview
+
 Feature-based modular architecture
 with service/repository layering
 inside a Next.js App Router structure
 inspired by Clean Architecture principles
 
+---
+
+## Problem
+
+---
+
+## Solution
+
+---
+
 ## Example
+
 ### Folder Structure
+
 ```
 /src
   /app
@@ -72,10 +105,13 @@ inspired by Clean Architecture principles
     env.ts
 ```
 
-## Notes
+---
+
+## Architecture Breakdown
+
 ### app/ folder
 
-This is the Next router layer.
+This is the **Next.js router layer**.
 
 It handles:
 
@@ -84,77 +120,129 @@ It handles:
 * API endpoints
 
 Example:
+
 ```
 /app/api/files/upload/route.ts
 ```
-But this file should stay thin.
 
-Example:
+This layer must remain **thin**.
+
 ```ts
 export async function POST(req: Request) {
   return fileService.upload(req)
 }
 ```
-All logic goes to services.
+
+All business logic belongs to services.
 
 ---
+
 ### modules/ folder (the heart)
 
-This is where the business logic lives.
+This is where **business logic lives**.
 
 Example:
+
 ```
 modules/files/file.service.ts
 ```
-Example service:
+
 ```ts
 export async function uploadFile(data) {
   const file = await storage.upload(data)
   return fileRepository.save(file)
 }
 ```
-This layer is framework independent.
 
-Later you can move it into a Node backend easily.
+Key characteristics:
+
+* Framework-independent
+* Contains core application logic
+* Easily portable to a Node.js backend
 
 ---
+
 ### lib/ folder
 
-Infrastructure code lives here.
+Infrastructure layer.
 
 Examples:
 
 Database connection:
+
 ```
 lib/db/client.ts
 ```
+
 Storage client:
+
 ```
 lib/storage/r2.ts
 ```
-Queue system (future):
+
+Queue system:
+
 ```
 lib/queue/jobs.ts
 ```
-Think of it as system plumbing.
+
+Think of it as:
+
+> System plumbing (external integrations)
 
 ---
+
 ### components/
 
-Reusable UI pieces.
+Reusable UI components.
+
 ```
 components/ui/button.tsx
 components/layout/navbar.tsx
 ```
-No business logic here.
+
+Rules:
+
+* No business logic
+* Pure UI
 
 ---
+
 ### hooks/
 
-React logic only.
+React-specific logic.
 
 Example:
+
 ```ts
 useAuth()
 useFileUpload()
 ```
+
+Rules:
+
+* UI interaction logic only
+* No backend/business logic
+
+---
+
+## Key Principles
+
+* Keep **API routes thin**
+* Move all logic to **services**
+* Keep **database logic in repositories**
+* Separate **business logic from framework**
+* Design for **future backend migration**
+
+---
+
+## Notes
+
+* Avoid mixing business logic inside UI or API routes
+* Keep modules self-contained by feature
+* Prefer clarity over abstraction
+* Structure should scale with features, not files
+
+---
+
+[⬆ Back to Table of Contents](#-table-of-contents)
