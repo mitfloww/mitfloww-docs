@@ -1,247 +1,446 @@
-# Modular Feature Architecture
+# Feature-Based Frontend Architecture (Next.js App Router)
 
 ## 📚 Table of Contents
 
-* [**Overview**](#overview)
-* [**Example**](#example)
+* [Overview](#overview)
+* [Project Structure](#project-structure)
+* [Architecture Breakdown](#architecture-breakdown)
 
-    * [Folder Structure](#folder-structure)
-  * [**Architecture Breakdown**](#architecture-breakdown)
-
-    * [app/ folder](#app-folder)
-    * [modules/ folder](#modules-folder-the-heart)
-    * [lib/ folder](#lib-folder)
-    * [components/](#components)
-    * [hooks/](#hooks)
-  * [Key Principles](#key-principles)
-* [**Problem**](#problem)
-* [**Solution**](#solution)
-* [**Notes**](#notes)
+  * [app/ (Routing Layer)](#app-routing-layer)
+  * [features/ (Core Application Layer)](#features-core-application-layer)
+  * [components/ (Shared UI)](#components-shared-ui)
+  * [lib/ (Infrastructure Layer)](#lib-infrastructure-layer)
+  * [i18n/ (Localization System)](#i18n-localization-system)
+  * [types/](#types)
+* [Usage Patterns](#usage-patterns)
+* [End-to-End Flow](#end-to-end-flow)
+* [Key Principles](#key-principles)
+* [Notes](#notes)
 
 ---
 
 ## Overview
 
-Feature-based modular architecture
-with service/repository layering
-inside a Next.js App Router structure
-inspired by Clean Architecture principles
+This project uses a **feature-based modular architecture** built on top of:
+
+* Next.js App Router
+* Tailwind v4 design tokens (`@theme`)
+* shadcn-style UI primitives
+* Scoped feature logic
+
+This is **NOT backend Clean Architecture**.
+
+Instead, it is optimized for:
+
+* frontend scalability
+* UI composition
+* feature isolation
+* maintainability
 
 ---
 
-## Problem
-
----
-
-## Solution
-
----
-
-## Example
-
-### Folder Structure
+## Project Structure
 
 ```
-/src
-  /app
-    /(public)
-      page.tsx
-      login
-      signup
-    /(dashboard)
-      dashboard
-      projects
-      payments
-    /api
-      /auth
-        route.ts
-      /files
-        upload
-          route.ts
-        preview
-          route.ts
-      /payments
-        route.ts
+src
+├── app
+│ ├── (dashboard)
+│ │ ├── analytics
+│ │ ├── projects
+│ │ ├── team
+│ │ ├── layout.tsx
+│ │ └── page.tsx
+│ ├── admin
+│ ├── api
+│ ├── health
+│ ├── globals.css
+│ └── layout.tsx
 
-  /components
-    ui
-    forms
-    layout
+├── components
+│ ├── layout
+│ └── ui
 
-  /modules
-    auth
-      auth.service.ts
-      auth.repository.ts
-      auth.types.ts
-    files
-      file.service.ts
-      preview.service.ts
-      watermark.service.ts
-      file.repository.ts
-    payments
-      payment.service.ts
-      escrow.service.ts
+├── features
+│ ├── admin
+│ ├── analytics
+│ ├── dashboard
+│ ├── health
+│ ├── projects
+│ └── team
 
-  /lib
-    db
-      client.ts
-    storage
-      r2.ts
-    queue
-      jobs.ts
-    utils
-      logger.ts
-      validation.ts
-
-  /hooks
-    useAuth.ts
-    useFiles.ts
-
-  /types
-    user.ts
-    file.ts
-
-  /config
-    env.ts
+├── i18n
+├── lib
+├── hooks
+├── config
+└── types
 ```
 
 ---
 
 ## Architecture Breakdown
 
-### app/ folder
+---
 
-This is the **Next.js router layer**.
+### app/ (Routing Layer)
 
-It handles:
+Handles:
 
-* pages
+* routes
 * layouts
+* server boundaries
 * API endpoints
 
 Example:
 
 ```
-/app/api/files/upload/route.ts
+app/(dashboard)/projects/page.tsx
 ```
 
-This layer must remain **thin**.
+Rules:
 
-```ts
-export async function POST(req: Request) {
-  return fileService.upload(req)
+* NO business logic
+* ONLY composition
+* imports feature components
+
+```tsx
+import ProjectsPageClient from "@/features/projects/components/projects-page.client";
+export default function Page() {
+  return <ProjectsPageClient />;
 }
 ```
 
-All business logic belongs to services.
-
 ---
 
-### modules/ folder (the heart)
+### features/ (Core Application Layer)
 
-This is where **business logic lives**.
+This is the **heart of the app**.
+
+Each feature is self-contained.
 
 Example:
 
 ```
-modules/files/file.service.ts
+features/projects/
+  components/
+  providers/
 ```
 
-```ts
-export async function uploadFile(data) {
-  const file = await storage.upload(data)
-  return fileRepository.save(file)
-}
-```
+Contains:
 
-Key characteristics:
-
-* Framework-independent
-* Contains core application logic
-* Easily portable to a Node.js backend
+* UI composition
+* feature-specific state
+* business logic (frontend level)
 
 ---
 
-### lib/ folder
+### components/ (Shared UI)
 
-Infrastructure layer.
-
-Examples:
-
-Database connection:
-
-```
-lib/db/client.ts
-```
-
-Storage client:
-
-```
-lib/storage/r2.ts
-```
-
-Queue system:
-
-```
-lib/queue/jobs.ts
-```
-
-Think of it as:
-
-> System plumbing (external integrations)
-
----
-
-### components/
-
-Reusable UI components.
+Reusable UI primitives.
 
 ```
 components/ui/button.tsx
-components/layout/navbar.tsx
+components/ui/dialog.tsx
+components/layout/app-navbar.tsx
 ```
 
 Rules:
 
-* No business logic
-* Pure UI
+* NO domain knowledge
+* NO feature logic
+* ONLY reusable UI
 
 ---
 
-### hooks/
+### lib/ (Infrastructure Layer)
 
-React-specific logic.
+External integrations and utilities.
 
-Example:
+Examples:
 
-```ts
-useAuth()
-useFileUpload()
+```
+lib/db
+lib/storage
+lib/queue
+lib/utils
 ```
 
 Rules:
 
-* UI interaction logic only
-* No backend/business logic
+* No UI
+* No feature logic
+* Only system-level helpers
+
+---
+
+### i18n/ (Localization System)
+
+Centralized localization.
+
+```
+i18n/messages/en.ts
+i18n/messages/hi.ts
+```
+
+Rules:
+
+* ALL user-facing text must come from i18n
+* No hardcoded strings in UI
+
+Usage:
+
+```tsx
+const t = useTranslations("projectsPage");
+t("title");
+```
+
+Language switching:
+
+* logic implemented
+* no UI required yet
+
+---
+
+### types/
+
+Global TypeScript definitions.
+
+---
+
+## Usage Patterns
+
+---
+
+### CASE 1: Adding a New Page
+
+Example: `/billing`
+
+```
+app/(dashboard)/billing/page.tsx
+features/billing/components/billing-page-content.tsx
+```
+
+Flow:
+
+```
+page.tsx → feature component
+```
+
+---
+
+### CASE 2: Adding UI inside a Page
+
+Example: Filters in projects
+
+❌ Wrong:
+
+```
+app/
+```
+
+✅ Correct:
+
+```
+features/projects/components/project-filters.tsx
+```
+
+---
+
+### CASE 3: Shared UI Component
+
+Example:
+
+```
+components/ui/button.tsx
+```
+
+Rule:
+
+> If it has zero domain knowledge → belongs in `components/ui`
+
+---
+
+### CASE 4: Shared Logic
+
+Example:
+
+```
+lib/utils/*
+```
+
+---
+
+### CASE 5: Feature-Specific Logic
+
+Example:
+
+```
+features/projects/hooks/
+features/projects/utils/
+```
+
+---
+
+### CASE 6: Global State / Provider
+
+Example:
+
+```
+features/projects/providers/projects-provider.tsx
+```
+
+---
+
+### CASE 7: Layout UI
+
+Example:
+
+```
+components/layout/app-navbar.tsx
+```
+
+Rule:
+
+* NEVER inside features
+
+---
+
+## End-to-End Flow
+
+---
+
+### /projects
+
+```
+URL → /projects
+   ↓
+app/(dashboard)/projects/page.tsx
+   ↓
+ProjectsPageClient
+   ↓
+features/projects/components/
+   ↓
+uses:
+  - project-card
+  - modal
+  - provider
+   ↓
+renders UI
+```
+
+---
+
+### /projects/[id]
+
+```
+URL → /projects/123
+   ↓
+page.tsx
+   ↓
+ProjectDetailsClient
+   ↓
+feature logic
+```
+
+---
+
+## Design System (Tailwind v4 + shadcn)
+
+---
+
+### Tokens (global.css)
+
+Defined using `@theme`:
+
+```
+--color-primary
+--color-foreground
+--radius-xl
+--shadow-card
+```
+
+Rules:
+
+* DO NOT hardcode colors
+* ALWAYS use tokens
+
+---
+
+### Styling Rules
+
+* Tailwind utilities in JSX
+* NO global component CSS
+* NO SCSS architecture
+
+---
+
+### Typography
+
+* Headings → Manrope
+* Body → Inter
+
+---
+
+### Components
+
+* Built using shadcn primitives
+* Wrapped in `/components/ui`
+* Styled via Tailwind
+
+---
+
+## Icons Strategy
+
+---
+
+### Use Icon Library (Default)
+
+Use libraries like:
+
+* lucide-react
+
+For:
+
+* buttons
+* navigation
+* actions
+
+---
+
+### Use Custom SVG (Selective)
+
+Use Figma SVG ONLY when:
+
+* brand-specific
+* not available in library
+* visually critical
+
+---
+
+### Rule
+
+> Consistency > pixel-perfect Figma match
 
 ---
 
 ## Key Principles
 
-* Keep **API routes thin**
-* Move all logic to **services**
-* Keep **database logic in repositories**
-* Separate **business logic from framework**
-* Design for **future backend migration**
+* Keep `app/` thin
+* Move logic into `features/`
+* Keep UI primitives reusable
+* Centralize tokens (not styles)
+* Avoid global CSS patterns
+* Localize ALL user-facing text
+* Maintain visual consistency
 
 ---
 
 ## Notes
 
-* Avoid mixing business logic inside UI or API routes
-* Keep modules self-contained by feature
+* Do NOT mix old “modules/service” architecture here
+* This is frontend-first architecture
+* Scales by feature, not by file type
 * Prefer clarity over abstraction
-* Structure should scale with features, not files
+* Avoid premature optimization
 
 ---
 
