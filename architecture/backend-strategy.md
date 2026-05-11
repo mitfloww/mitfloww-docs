@@ -391,6 +391,8 @@ export async function POST(req: Request) {
 * Run drizzle migration using:
     * `npx drizzle-kit generate`
     * `npx drizzle-kit push`
+* To ensure schema before running migrations:
+    ```npm run db:bootstrap```
 ---
 
 [⬆ Back to Table of Contents](#-table-of-contents)
