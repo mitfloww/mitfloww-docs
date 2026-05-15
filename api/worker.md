@@ -1,110 +1,143 @@
-# 0. Mental Model (READ THIS FIRST)
+# Worker System Documentation (Processing Engine)
 
-This is a **distributed job processing system**:
+---
+
+### Worker System Architecture
+
+* [**Overview**](#overview)
+
+  * [Mental Model](#mental-model)
+  * [Core Responsibilities](#core-responsibilities)
+  * [Processing Flow](#processing-flow)
+* [**Core Concepts**](#core-concepts)
+
+  * [TTL (Time-To-Live)](#ttl-time-to-live)
+  * [Idempotency Lock](#idempotency-lock)
+  * [Heartbeat](#heartbeat)
+  * [Queue Segmentation](#queue-segmentation)
+  * [Dead Letter Queue (DLQ)](#dead-letter-queue-dlq)
+* [**Architecture Breakdown**](#architecture-breakdown)
+
+  * [Entry Point](#entry-point-srcindexts)
+  * [Queue Layer](#queue-layer)
+  * [Worker Layer](#worker-layer)
+  * [Processing Layer](#processing-layer)
+  * [Storage Layer](#storage-layer)
+  * [Admin & API Layer](#admin--api-layer)
+* [**Processing Pipeline**](#processing-pipeline)
+
+  * [Step-by-Step Execution](#step-by-step-execution)
+  * [Video Pipeline](#video-pipeline)
+  * [Image Pipeline](#image-pipeline)
+* [**Concurrency & Resource Control**](#concurrency--resource-control)
+
+  * [CPU Limiting](#cpu-limiting)
+  * [Disk Reservation](#disk-reservation)
+  * [User-Level Limits](#user-level-limits)
+  * [Upload Throttling](#upload-throttling)
+* [**Failure Handling Strategy**](#failure-handling-strategy)
+
+  * [Retry Logic](#retry-logic)
+  * [Poison Job Detection](#poison-job-detection)
+  * [DLQ Strategy](#dlq-strategy)
+* [**Admin API Endpoints**](#admin-api-endpoints)
+* [**System Guarantees**](#system-guarantees)
+* [**Weak Points & Risks**](#weak-points--risks)
+* [**Key Design Decisions**](#key-design-decisions)
+* [**Notes**](#notes)
+
+---
+
+# Overview
+
+## Mental Model
+
+This system is a **distributed job processing pipeline**:
 
 ```
-Client / LocalTest
-        ↓
-   enqueueFile()
-        ↓
-   Redis (metadata + queue)
-        ↓
-   BullMQ Queues
-        ↓
-   Workers (parallel)
-        ↓
-   Processing (FFmpeg / Sharp)
-        ↓
-   Upload (local / R2)
-        ↓
-   Redis updated → Admin API → UI
+Client → enqueueFile → Redis → BullMQ → Worker → Process → Upload → API/UI
+```
+
+The worker is **not just a processor**, it is:
+
+* a **state machine executor**
+* a **resource scheduler**
+* a **fault-tolerant pipeline engine**
+
+Reference system flow: 
+
+---
+
+## Core Responsibilities
+
+The worker system is responsible for:
+
+* executing file processing jobs
+* maintaining job state in Redis
+* ensuring idempotency (no duplicate execution)
+* managing CPU, disk, and concurrency limits
+* handling retries and failures
+* generating previews and final outputs
+
+---
+
+## Processing Flow
+
+```
+enqueue → queue → worker picks job
+        → lock → download → process → upload
+        → update Redis → release resources
 ```
 
 ---
 
-# 1. CORE CONCEPTS (CRITICAL)
+# Core Concepts
 
-## 1.1 TTL (Time-To-Live)
-
-TTL = expiry time in Redis.
+## TTL (Time-To-Live)
 
 Used in:
 
-* `job metadata`
-* `logs`
-* `locks`
+* job metadata
+* logs
+* locks
 
-### Why?
+Purpose:
 
-Without TTL:
-
-* Redis grows forever → memory leak
-* stale jobs remain forever
-
-### Example
-
-```ts
-await connection.expire(jobKey, 86400)
-```
-
-→ delete job after 24h
+* prevents Redis memory leaks
+* auto-cleans stale jobs
 
 ---
 
-## 1.2 Lock (Idempotency Lock)
+## Idempotency Lock
 
 ```
 lock:{jobId}
 ```
 
-### Purpose:
+Prevents duplicate execution caused by:
 
-Prevent **duplicate processing**
+* retries
+* worker crashes
+* race conditions
 
-### Why needed?
+Mechanism:
 
-BullMQ can:
-
-* retry jobs
-* crash + restart workers
-
-→ same job can run twice
-
-### Fix:
-
-```ts
+```
 SET lockKey WORKER_ID PX TTL NX
 ```
 
-* NX = only set if not exists
-* PX = expiry
+---
 
-If lock exists → skip job
+## Heartbeat
+
+Runs periodically:
+
+* extends lock TTL
+* prevents lock expiry during long jobs
 
 ---
 
-## 1.3 Heartbeat
-
-Runs every 60s:
-
-```ts
-setInterval(() => {
-  extend lock TTL
-}, 60s)
-```
-
-### Why?
-
-If job runs long:
-
-* lock expires
-* another worker starts same job → duplication
-
-Heartbeat prevents that.
-
----
-
-## 1.4 Queue System (BullMQ)
+## Queue Segmentation
 
 Queues:
 
@@ -113,836 +146,361 @@ Queues:
 * large-files
 * image-files
 
-Each has:
+Purpose:
 
-* different concurrency
-* different cost
+* prevents large jobs blocking small ones
+* enables priority isolation
 
 ---
 
-## 1.5 DLQ (Dead Letter Queue)
+## Dead Letter Queue (DLQ)
 
 ```
 dead-letter-queue
 ```
 
-Stores:
-
-* permanently failed jobs
-
-Why?
+Stores permanently failed jobs for:
 
 * debugging
-* retry manually
+* manual retry
 
 ---
 
-# 2. FILE-BY-FILE EXPLANATION
+# Architecture Breakdown
+
+## Entry Point (src/index.ts)
+
+Responsibilities:
+
+* initializes workers
+* starts API server
+* runs schedulers
+* runs background jobs:
+
+  * stuck job recovery
+  * disk cleanup
 
 ---
 
-# src/config.ts
-
-### Purpose:
-
-Central config system
-
----
-
-### validateEnv()
-
-```ts
-if (value === undefined || value === '')
-```
-
-Why:
-
-* prevents silent misconfig
-* fail fast
-
----
-
-### config object
-
-Key parts:
-
-#### mode
-
-```ts
-mode: process.env.MODE
-```
-
-* `local` → test mode
-* `server` → production
-
----
-
-#### redis
-
-```ts
-host + port
-```
-
-Used by BullMQ + metadata
-
----
-
-#### ffmpegPath
-
-Allows:
-
-* system ffmpeg
-* custom binary
-
----
-
-#### tempDir
-
-```ts
-os.tmpdir()
-```
-
-Used for:
-
-* downloads
-* processing
-
----
-
-#### concurrency
-
-Controls:
-
-* parallel jobs per worker
-
----
-
-#### rateLimit
-
-Currently unused, but for API throttling
-
----
-
-#### disk thresholds
-
-```ts
-minFreeBytes
-targetFreeBytes
-```
-
-Used to:
-
-* prevent disk crash
-
----
-
-### Directory creation
-
-```ts
-if (!exists) mkdir
-```
-
-Why:
-Avoid runtime crash when writing files
-
----
-
----
-
-# src/constants.ts
-
-Pure constants.
-
----
-
-### JOB_STATUS
-
-Backend state machine:
-
-```
-queued → processing → uploading → completed
-```
-
----
-
-### JOB_STAGE
-
-More granular:
-
-```
-downloading, processing, uploading
-```
-
-Used for UI.
-
----
-
-### REDIS_KEYS
-
-Important pattern:
-
-```ts
-job:{id}
-job:{id}:logs
-lock:{id}
-```
-
----
-
----
-
-# src/index.ts (ENTRY POINT)
-
----
-
-### dotenv
-
-```ts
-dotenv.config()
-```
-
-Loads `.env.local`
-
----
-
-### Import workers
-
-```ts
-import './worker/fastWorker';
-```
-
-Why:
-Just importing → starts workers
-
----
-
-### SESSION_ID
-
-```ts
-process.env.SESSION_ID = Date.now()
-```
-
-Used to isolate runs.
-
----
-
-### Mode switch
-
-```ts
-if server → start API
-else → localTest
-```
-
----
-
-### Background jobs
-
-#### 1. Stuck job recovery
-
-Runs every 60s:
-
-```ts
-recoverStuckJobs()
-```
-
----
-
-#### 2. Disk cleanup
-
-```ts
-if free < threshold → cleanup
-```
-
----
-
----
-
-# src/localTest.ts
-
-Simulates real usage.
-
----
-
-### initialScan()
-
-Reads test folder → enqueue files
-
----
-
-### startPolling()
-
-Every 3s:
-
-* detects new files
-
----
-
-### enqueueSafe()
-
-Steps:
-
-1. detect file type
-2. build job object
-3. call enqueueFile()
-
----
-
----
-
-# src/queue/enqueue.ts (VERY IMPORTANT)
-
-This is the **entry to system**
-
----
-
-### classify()
-
-```ts
-<100MB → small
-<500MB → medium
-else → large
-```
-
----
-
-### basePriority()
-
-Combines:
-
-* user tier
-* file size
-
-Lower number = higher priority
-
----
-
-### getPriority()
-
-Adds **aging**
-
-```ts
-priority = base - waitingTime
-```
-
-Why:
-Prevents starvation
-
----
+## Queue Layer
 
 ### enqueueFile()
 
-#### Step 1: read existing job
+Responsibilities:
 
-```ts
-hgetall(job)
+* stores metadata in Redis
+* assigns priority
+* selects queue
+* pushes job to BullMQ
+
+Redis = **source of truth**
+
+---
+
+## Worker Layer
+
+Workers:
+
+| Worker Type    | Queue        | Purpose               |
+| -------------- | ------------ | --------------------- |
+| fastWorker     | small-files  | high throughput       |
+| standardWorker | medium-files | balanced              |
+| heavyWorker    | large-files  | controlled processing |
+| imageWorker    | image-files  | lightweight tasks     |
+
+---
+
+## Processing Layer
+
+Handled in:
+
+```
+worker/handler.ts
 ```
 
+Responsibilities:
+
+* lock acquisition
+* download
+* processing (image/video)
+* upload
+* error handling
+
 ---
 
-#### Step 2: store metadata
+## Storage Layer
 
-```ts
-hset(job:{id}, {...})
+Handles:
+
+* local storage (dev)
+* R2 (production)
+
+Includes:
+
+* upload throttling
+* distributed upload limiter
+
+---
+
+## Admin & API Layer
+
+Endpoints:
+
+* `/admin`
+* `/admin/job/:id`
+* `/preview/:id`
+* `/admin/dlq`
+* `/admin/retry/:id`
+
+Provides:
+
+* system snapshot
+* job tracking
+* retry controls
+
+---
+
+# Processing Pipeline
+
+## Step-by-Step Execution
+
+1. Acquire lock
+2. Allocate resources (CPU, disk, user slot)
+3. Download file
+4. Normalize input
+5. Process file
+6. Upload result
+7. Update Redis
+8. Cleanup
+9. Release lock
+
+---
+
+## Video Pipeline
+
+Key steps:
+
+* probe video (ffprobe)
+* optional MKV remux
+* generate preview clip
+* process full video (FFmpeg)
+* track progress via `out_time_ms`
+
+Output:
+
+* MP4 (final)
+* preview clip (fallback supported)
+
+---
+
+## Image Pipeline
+
+Handled using Sharp:
+
+* resize
+* watermark
+* format optimization
+
+Output format is dynamically chosen:
+
+* PNG / JPEG / WebP / GIF
+
+---
+
+# Concurrency & Resource Control
+
+## CPU Limiting
+
+Global distributed semaphore:
+
+```
+global:cpu
 ```
 
-This is **source of truth for UI**
+Prevents CPU oversubscription across workers.
 
 ---
 
-#### Step 3: TTL
+## Disk Reservation
 
-```ts
-expire 24h
+Redis-based reservation:
+
+```
+global:disk_reserved
 ```
 
+Prevents:
+
+* multiple workers consuming disk simultaneously
+
 ---
 
-#### Step 4: choose queue
+## User-Level Limits
 
-```ts
-image → imageQueue
-small → smallQueue
+```
+user:{userId}:active
 ```
 
+Ensures:
+
+* fair usage per user tier
+
 ---
 
-#### Step 5: add to BullMQ
+## Upload Throttling
 
-```ts
-queue.add()
+Global limiter:
+
+```
+global:upload_slots
 ```
 
-Options:
-
-* priority
-* retries
-* exponential backoff
+Prevents upload bottlenecks.
 
 ---
 
----
+# Failure Handling Strategy
 
-# src/worker/handler.ts (CORE ENGINE)
-
-This is the **most critical file**
-
----
-
-## FLOW:
-
----
-
-### STEP 1: LOCK
-
-```ts
-SET lock NX
-```
-
-If fail → exit
-
----
-
-### STEP 2: CREATE TEMP DIR
-
-```ts
-/tmp/{jobId}
-```
-
----
-
-### STEP 3: DOWNLOAD
-
-```ts
-download(input → local file)
-```
-
----
-
-### STEP 4: COMPUTE TTL
+## Retry Logic
 
 Based on:
 
 * file size
-* video duration
+* retry count
+* error type
 
 ---
 
-### STEP 5: HEARTBEAT
+## Poison Job Detection
 
-Keeps lock alive
+If same error repeats:
 
----
-
-### STEP 6: VALIDATE DISK
-
-```ts
-if free < required → fail
-```
+→ job is moved to DLQ early
 
 ---
 
-### STEP 7: PROCESS
+## DLQ Strategy
 
-#### IMAGE:
+Jobs moved when:
 
-```ts
-sharp → resize + watermark
-```
-
-#### VIDEO:
-
-Uses FFmpeg → HLS streaming
+* max retries exceeded
+* non-recoverable failure
 
 ---
 
-## VIDEO PIPELINE (IMPORTANT)
+# Admin API Endpoints
 
-Instead of single file:
-
-```
-.m3u8 (playlist)
-.ts files (chunks)
-```
-
-Why?
-
-* progressive playback
-* streaming support
+| Endpoint           | Purpose              |
+| ------------------ | -------------------- |
+| `/admin`           | full system snapshot |
+| `/admin/job/:id`   | job details          |
+| `/preview/:id`     | preview URLs         |
+| `/admin/dlq`       | failed jobs          |
+| `/admin/retry/:id` | retry job            |
+| `/job/:id`         | public job status    |
 
 ---
 
-### WATCHER
+# System Guarantees
 
-```ts
-fs.watch(hlsDir)
-```
+The system guarantees:
 
-Uploads files as they appear
-
----
-
-### FALLBACK SCAN
-
-Why:
-fs.watch is unreliable
+* no duplicate processing (lock)
+* bounded resource usage (CPU, disk)
+* eventual completion or failure (no silent drops)
+* observability via Redis + API
 
 ---
 
-### PROGRESS TRACKING
+# Weak Points & Risks
 
-From FFmpeg:
+## Redis Dependency
 
-```
-out_time_ms
-```
+Assumption:
 
-Converted to %
+* Redis is always available
 
----
+Risk:
 
----
-
-### STEP 8: UPLOAD
-
-* images → upload file
-* video → already uploaded via chunks
+* full system failure if Redis goes down
 
 ---
 
-### STEP 9: COMPLETE
+## Disk Race Conditions
 
-```ts
-status = completed
-```
+Even with reservation:
 
----
-
-### STEP 10: ERROR HANDLING
-
-If fail:
-
-#### Case 1: retryable
-
-→ BullMQ retry
-
-#### Case 2: permanent
-
-→ DLQ
+* edge cases possible under high concurrency
 
 ---
 
-### Poison job detection
+## Lock TTL Accuracy
 
-```ts
-same error repeated → stop retry
-```
+If heartbeat fails:
 
----
-
-### STEP 11: CLEANUP
-
-* success → delete temp
-* fail → delay delete
+* duplicate execution possible
 
 ---
 
-### STEP 12: RELEASE LOCK
+## fs.watch Reliability
 
-```ts
-DEL lockKey
-```
+Mitigated with fallback scanning, but still imperfect.
 
 ---
 
----
+# Key Design Decisions
 
-# Workers
-
----
-
-## fastWorker.ts
-
-Small files:
-
-```ts
-concurrency: 5
-```
-
----
-
-## standardWorker.ts
-
-Medium:
-
-```ts
-concurrency: 3
-```
-
----
-
-## heavyWorker.ts
-
-Large:
-
-```ts
-concurrency: 1
-```
-
----
-
-## imageWorker.ts
-
-Images:
-
-```ts
-concurrency: 15
-```
-
----
-
-# Why separate workers?
-
-Prevents:
-
-* large jobs blocking small jobs
-
----
-
----
-
-# src/server/admin.ts
-
-Provides **system visibility**
-
----
-
-### getSystemSnapshot()
-
-Does:
-
-1. scan Redis
-2. fetch all jobs
-3. merge:
-
-   * Redis state
-   * BullMQ state
-
----
-
-### queue position
-
-```ts
-queue.getWaiting()
-```
-
----
-
-### ETA calculation
-
-```ts
-eta = remaining / speed
-```
-
----
-
----
-
-# src/server/http.ts
-
-Simple HTTP server
-
----
-
-### endpoints
-
-#### /admin
-
-→ system snapshot
-
-#### /admin/job/:id
-
-→ job detail
-
-#### /preview/:id
-
-→ video preview URL
-
-#### /admin/dlq
-
-→ failed jobs
-
-#### /admin/retry/:id
-
-→ retry job
-
----
-
-### static serving
-
-Serves local video files
-
----
-
----
-
-# src/server/ws.ts
-
-WebSocket server
-
-Every 1s:
-
-```ts
-send system snapshot
-```
-
-Used for real-time UI
-
----
-
----
-
-# src/utils
-
----
-
-## cleanup.ts
-
-Deletes old temp folders
-
----
-
-## disk.ts
-
-Uses:
-
-```ts
-statfs
-```
-
-to get disk space
-
----
-
-## r2.ts
-
-Handles:
-
-* download
-* upload
-
----
-
----
-
-# FINAL FLOW (COMPLETE)
-
-```
-localTest → enqueueFile
-           ↓
-        Redis metadata
-           ↓
-        BullMQ queue
-           ↓
-        Worker picks job
-           ↓
-        Lock acquired
-           ↓
-        Download file
-           ↓
-        Process (image/video)
-           ↓
-        Upload result
-           ↓
-        Update Redis
-           ↓
-        UI reads via /admin or WS
-```
-
----
-
-# CRITICAL DESIGN DECISIONS (WHY THIS WAY)
-
----
-
-## 1. Redis = source of truth
+## Redis as Source of Truth
 
 Not BullMQ
 
-Why:
+Reason:
 
-* BullMQ state is limited
-* Redis allows custom metadata
-
----
-
-## 2. HLS instead of MP4
-
-Why:
-
-* streaming
-* partial playback
-* large file support
+* flexible metadata
+* UI-friendly state
 
 ---
 
-## 3. Separate queues
+## HLS Avoidance (Preview Strategy)
 
-Why:
+Instead of full HLS:
 
-* fairness
-* avoids blocking
+* lightweight preview clips
 
----
+Reason:
 
-## 4. Idempotency lock
-
-Why:
-
-* prevents double processing
+* faster processing
+* lower cost
 
 ---
 
-## 5. Heartbeat
+## Separate Queues
 
-Why:
-
-* prevents lock expiry mid-job
+Ensures fairness and prevents starvation.
 
 ---
 
-# WEAK AREAS (Which SHOULD QUESTION)
+## Distributed Resource Control
 
-## Assumption: Redis never fails
+Using Redis:
 
-Reality:
-
-* if Redis goes down → system breaks
-
-Mitigation:
-
-* retry layer
-* fallback persistence
+* CPU
+* disk
+* uploads
 
 ---
 
-## Assumption: fs.watch is reliable
+# Notes
 
-Already patched with scanner
+* Worker is the **core engine of MitFloww**
+* System is designed for **horizontal scalability**
+* Strong focus on:
 
----
+  * fault tolerance
+  * fairness
+  * observability
 
-## Assumption: disk always enough
-
-Currently we check, but:
-
-* concurrent jobs can still exceed disk
-
----
-
-## Assumption: lock TTL always correct
-
-Edge:
-
-* job takes longer than TTL even with heartbeat delay
 
 ---
+
+[⬆ Back to Table of Contents](#worker-system-architecture)

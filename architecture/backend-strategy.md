@@ -391,6 +391,10 @@ export async function POST(req: Request) {
 * Run drizzle migration using:
     * `npx drizzle-kit generate`
     * `npx drizzle-kit push`
+* For cloud DB:
+    * ```DATABASE_URL=<neon_url> npx drizzle-kit migrate```
+* To ensure schema before running migrations:
+    * ```npm run db:bootstrap```
 ---
 
 [⬆ Back to Table of Contents](#-table-of-contents)
